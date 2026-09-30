@@ -58,9 +58,10 @@ from ..operation.abandon import abandon_request_to_dict
 from ..core.tls import Tls
 from ..protocol.oid import Oids
 from ..protocol.rfc2696 import RealSearchControlValue
+from ..protocol.rfc2891 import SortKeyList, SortResult
 from ..protocol.microsoft import DirSyncControlResponseValue
 from ..utils.log import log, log_enabled, ERROR, BASIC, PROTOCOL, NETWORK, EXTENDED, format_ldap_message
-from ..utils.asn1 import encode, decoder, ldap_result_to_dict_fast, decode_sequence
+from ..utils.asn1 import encode, decoder, ldap_result_to_dict_fast, decode_sequence, decode_octet_string
 from ..utils.conv import to_unicode
 from ..protocol.sasl.digestMd5 import md5_h, md5_hmac
 from ..protocol.sasl.kerberos import posix_gssapi_unavailable
@@ -604,6 +605,18 @@ class BaseStrategy(object):
             control_value = dict()
             control_value['size'] = int(control_resp['size'])
             control_value['cookie'] = bytes(control_resp['cookie'])
+        elif control_type == '1.2.840.113556.1.4.473':  # server side sorting request as per RFC2891
+            control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SortKeyList())
+            control_value = []
+            for sort_key in control_resp:
+                control_value.append({'attribute': str(sort_key['attributeType']),
+                                      'ordering_rule': str(sort_key['orderingRule']) if sort_key['orderingRule'].isValue else None,
+                                      'reverse': bool(sort_key['reverseOrder'])})
+        elif control_type == '1.2.840.113556.1.4.474':  # server side sorting response as per RFC2891
+            control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SortResult())
+            control_value = dict()
+            control_value['sort_result'] = int(control_resp['sortResult'])
+            control_value['attribute_type'] = str(control_resp['attributeType']) if control_resp['attributeType'].isValue else None
         elif control_type == '1.2.840.113556.1.4.841':  # DirSync AD
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=DirSyncControlResponseValue())
             control_value = dict()
@@ -638,6 +651,11 @@ class BaseStrategy(object):
             control_value = dict()
             control_value['size'] = int(control_resp[0][3][0][3])
             control_value['cookie'] = bytes(control_resp[0][3][1][3])
+        elif control_type == '1.2.840.113556.1.4.474':  # server side sorting response as per RFC2891
+            control_resp = decode_sequence(control_value, 0, len(control_value), {0: decode_octet_string})
+            control_value = dict()
+            control_value['sort_result'] = int(control_resp[0][3][0][3])
+            control_value['attribute_type'] = to_unicode(control_resp[0][3][1][3]) if len(control_resp[0][3]) > 1 else None
         elif control_type == '1.2.840.113556.1.4.841':  # DirSync AD
             control_resp = decode_sequence(control_value, 0, len(control_value))
             control_value = dict()

@@ -45,12 +45,14 @@ from ..utils.conv import json_hook, to_unicode, to_raw
 from ..core.exceptions import LDAPDefinitionError, LDAPPasswordIsMandatoryError, LDAPInvalidValueError, LDAPSocketOpenError
 from ..core.results import RESULT_SUCCESS, RESULT_OPERATIONS_ERROR, RESULT_UNAVAILABLE_CRITICAL_EXTENSION, \
     RESULT_INVALID_CREDENTIALS, RESULT_NO_SUCH_OBJECT, RESULT_ENTRY_ALREADY_EXISTS, RESULT_COMPARE_TRUE, \
-    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN
+    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN, \
+    RESULT_INAPPROPRIATE_MATCHING
 from ..utils.ciDict import CaseInsensitiveDict
 from ..utils.dn import to_dn, safe_dn, safe_rdn
 from ..protocol.sasl.sasl import validate_simple_password
 from ..protocol.formatters.standard import find_attribute_validator, format_attribute_values
 from ..protocol.rfc2696 import paged_search_control
+from ..protocol.rfc2891 import sort_response_control, SORT_RESULT_SUCCESS, SORT_RESULT_NO_SUCH_ATTRIBUTE, SORT_RESULT_INAPPROPRIATE_MATCHING
 from ..utils.log import log, log_enabled, ERROR, BASIC
 from ..utils.asn1 import encode
 from ..utils.conv import ldap_escape_to_bytes
@@ -114,22 +116,32 @@ from ..protocol.convert import build_controls_list
 
 # noinspection PyProtectedMember,PyUnresolvedReferences
 
-SEARCH_CONTROLS = ['1.2.840.113556.1.4.319'  # simple paged search [RFC 2696]
+SEARCH_CONTROLS = ['1.2.840.113556.1.4.319',  # simple paged search [RFC 2696]
+                   '1.2.840.113556.1.4.473',  # server side sorting request [RFC 2891]
+                   '1.2.840.113556.1.4.474'  # server side sorting response [RFC 2891]
                    ]
 SERVER_ENCODING = 'utf-8'
 
+# matching rules known by the mock server for server side sorting, maps
+# case-insensitive names and oids to a canonical form
+SORT_MATCHING_RULES = {'caseignorematch': 'caseIgnoreMatch',
+                       '2.5.13.2': 'caseIgnoreMatch',
+                       'caseexactmatch': '2.5.13.5',
+                       '2.5.13.5': 'caseExactMatch'}
 
 def random_cookie():
     return to_raw(SystemRandom().random())[-6:]
 
 
 class PagedSearchSet(object):
-    def __init__(self, response, size, criticality):
+    def __init__(self, response, size, criticality, sort_spec=None, sort_control=None):
         self.size = size
         self.response = response
         self.cookie = None
         self.sent = 0
         self.done = False
+        self.sort_spec = sort_spec  # decoded sort request (RFC 2891) the paged set was created with
+        self.sort_control = sort_control  # encoded sort response control to return with each page
 
     def next(self, size=None):
         if size:
@@ -145,11 +157,14 @@ class PagedSearchSet(object):
             self.cookie = random_cookie()
 
         response_control = paged_search_control(False, len(self.response), self.cookie)
+        controls = [BaseStrategy.decode_control(response_control)]
+        if self.sort_control is not None:
+            controls.append(BaseStrategy.decode_control(self.sort_control))
         result = {'resultCode': RESULT_SUCCESS,
                   'matchedDN': '',
                   'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
                   'referral': None,
-                  'controls': [BaseStrategy.decode_control(response_control)]
+                  'controls': controls
                   }
         return response, result
 
@@ -924,4 +939,3 @@ class MockBaseStrategy(object):
             if log_enabled(ERROR):
                 log(ERROR, '<%s> for <%s>', self.connection.last_error, self.connection)
             raise LDAPSocketOpenError(self.connection.last_error)
-
