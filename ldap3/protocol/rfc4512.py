@@ -111,6 +111,93 @@ def list_to_string(list_object):
     return r[:-2] if r else ''
 
 
+class EffectiveSchemaSource(object):
+    """Origin of an attribute requirement in an effective object class definition."""
+
+    def __init__(self, requirement, object_class, path, reference=None):
+        self.requirement = requirement
+        self.object_class = object_class
+        self.path = path
+        self.reference = reference
+
+    def __repr__(self):
+        return 'EffectiveSchemaSource(%r, %r, %r)' % (self.requirement, self.object_class, self.path)
+
+
+class EffectiveSchemaAttribute(object):
+    """Effective attribute type after following attribute supertype constraints."""
+
+    def __init__(self, oid, names=None, single_value=False, syntax=None, definition=None):
+        self.oid = oid
+        self.names = names or []
+        self.aliases = self.names[1:] if self.names else []
+        self.single_value = single_value
+        self.syntax = syntax
+        self.definition = definition
+        self.sources = []
+
+    @property
+    def mandatory(self):
+        return any(source.requirement == 'MUST' for source in self.sources)
+
+    @property
+    def may(self):
+        return any(source.requirement == 'MAY' for source in self.sources)
+
+    def __repr__(self):
+        return 'EffectiveSchemaAttribute(%r, %r, single_value=%r)' % (self.oid, self.names, self.single_value)
+
+
+class EffectiveSchemaDefinition(object):
+    """Required and optional attributes allowed by a set of LDAP object classes."""
+
+    def __init__(self, object_classes=None, auxiliary_classes=None, attributes=None, errors=None):
+        self.object_classes = object_classes or []
+        self.auxiliary_classes = auxiliary_classes or []
+        self.attributes = attributes or CaseInsensitiveWithAliasDict()
+        self.must = CaseInsensitiveWithAliasDict()
+        self.may = CaseInsensitiveWithAliasDict()
+        self.errors = errors or []
+
+    @property
+    def mandatory_attributes(self):
+        return self.must
+
+    @property
+    def optional_attributes(self):
+        return self.may
+
+    @property
+    def required_attributes(self):
+        return self.must
+
+    @property
+    def allowed_attributes(self):
+        return self.attributes
+
+    @property
+    def valid(self):
+        return not self.errors
+
+    def __contains__(self, item):
+        return item in self.attributes
+
+    def __getitem__(self, item):
+        return self.attributes[item]
+
+    def __iter__(self):
+        return iter(self.attributes)
+
+    def __len__(self):
+        return len(self.attributes)
+
+    def __repr__(self):
+        return 'EffectiveSchemaDefinition(must=%r, may=%r, errors=%r)' % (
+            [attribute.names[0] if attribute.names else attribute.oid for attribute in self.must.values()],
+            [attribute.names[0] if attribute.names else attribute.oid for attribute in self.may.values()],
+            self.errors)
+
+
 class BaseServerInfo(object):
     def __init__(self, raw_attributes):
         self.raw = dict(raw_attributes)
@@ -318,6 +405,358 @@ class SchemaInfo(BaseServerInfo):
                         self.attribute_types[attribute].optional_in.append(object_class)
                     except KeyError:
                         pass
+
+    @staticmethod
+    def _as_name_list(values):
+        if values is None:
+            return []
+        if not isinstance(values, SEQUENCE_TYPES):
+            return [values]
+        return list(values)
+
+    @staticmethod
+    def _extend_unique(target, values):
+        for value in values:
+            if value not in target:
+                target.append(value)
+
+    def _schema_index(self, definitions, include_attribute_properties=False):
+        index = dict()
+        seen = set()
+        for definition in definitions.values():
+            definition_id = id(definition)
+            if definition_id in seen:
+                continue
+            seen.add(definition_id)
+            entry = index.get(definition.oid)
+            if entry is None:
+                entry = dict(oid=definition.oid,
+                             names=list(definition.name or []),
+                             superior=list(definition.superior or []))
+                if include_attribute_properties:
+                    entry['single_value'] = bool(definition.single_value)
+                    entry['syntax'] = definition.syntax
+                else:
+                    entry['kind'] = definition.kind
+                    entry['must'] = list(definition.must_contain or [])
+                    entry['may'] = list(definition.may_contain or [])
+                index[definition.oid] = entry
+            else:
+                self._extend_unique(entry['names'], definition.name or [])
+                self._extend_unique(entry['superior'], definition.superior or [])
+                if include_attribute_properties:
+                    entry['single_value'] = entry.get('single_value', False) or bool(definition.single_value)
+                    if not entry.get('syntax') and definition.syntax:
+                        entry['syntax'] = definition.syntax
+                else:
+                    if entry.get('kind') is None:
+                        entry['kind'] = definition.kind
+                    self._extend_unique(entry['must'], definition.must_contain or [])
+                    self._extend_unique(entry['may'], definition.may_contain or [])
+        return index
+
+    @staticmethod
+    def _resolve_reference(reference, definitions, index):
+        if reference in definitions:
+            definition = definitions[reference]
+            return index.get(definition.oid)
+        return index.get(reference)
+
+    @staticmethod
+    def _display_name(definition, reference):
+        if definition and definition.get('names'):
+            return definition['names'][0]
+        return reference
+
+    def _class_paths(self, reference, class_index, path=None):
+        if path is None:
+            path = []
+        definition = class_index.get(reference)
+        if definition is None or not isinstance(definition, dict):
+            definition = self._resolve_reference(reference, self.object_classes, class_index)
+        name = self._display_name(definition, reference)
+        current_path = path + [name]
+        if definition is None:
+            return [current_path]
+        if name in path:
+            return [current_path]
+
+        superior_paths = []
+        for superior in definition['superior']:
+            superior_paths.extend(self._class_paths(superior, class_index, current_path))
+        return [current_path] + superior_paths
+
+    def _structural_error(self, structural_classes, class_index):
+        resolved = []
+        for reference in structural_classes:
+            definition = class_index.get(reference)
+            if definition is None or not isinstance(definition, dict):
+                definition = self._resolve_reference(reference, self.object_classes, class_index)
+            resolved.append((reference, definition))
+        resolved = [(reference, definition) for reference, definition in resolved
+                    if definition and definition['kind'] == CLASS_STRUCTURAL]
+
+        unique = []
+        seen = set()
+        for reference, definition in resolved:
+            if definition['oid'] not in seen:
+                seen.add(definition['oid'])
+                unique.append((reference, definition))
+
+        if len(unique) < 2:
+            return None
+
+        def reachable_oids(definition):
+            oids = set()
+            stack = [self._resolve_reference(superior, self.object_classes, class_index)
+                     for superior in definition['superior']]
+            visited = set()
+            while stack:
+                superior_definition = stack.pop()
+                if superior_definition is None or superior_definition['oid'] in visited:
+                    continue
+                visited.add(superior_definition['oid'])
+                oids.add(superior_definition['oid'])
+                stack.extend([self._resolve_reference(candidate, self.object_classes, class_index)
+                              for candidate in superior_definition['superior']])
+            return oids
+
+        candidates = []
+        for pos, (reference, definition) in enumerate(unique):
+            is_superior_of_another = False
+            for other_pos, (_, other) in enumerate(unique):
+                if pos != other_pos and definition['oid'] in reachable_oids(other):
+                    is_superior_of_another = True
+                    break
+            if not is_superior_of_another:
+                candidates.append((reference, definition))
+
+        if len(candidates) < 2:
+            return None
+
+        return dict(type='incompatible_structural_classes',
+                    object_classes=[self._display_name(definition, reference)
+                                    for reference, definition in candidates],
+                    paths=sum([self._class_paths(reference, class_index)
+                               for reference, _ in candidates], []))
+
+    def _resolve_attribute(self, reference, attribute_index, errors, seen_errors=None):
+        if seen_errors is None:
+            seen_errors = set()
+        current = self._resolve_reference(reference, self.attribute_types, attribute_index)
+        if current is None:
+            return None
+
+        current = current['oid']
+        oid = current
+        names = []
+        single_value = False
+        syntax = None
+        path = []
+        active = set()
+        reported_errors = set()
+
+        def add_attribute_error(error_type, **values):
+            key = (error_type, values.get('superior'), tuple(values.get('path', [])))
+            if key not in seen_errors and key not in reported_errors:
+                reported_errors.add(key)
+                error = dict(type=error_type)
+                error.update(values)
+                errors.append(error)
+
+        while current:
+            current_definition = attribute_index.get(current)
+            if current_definition is None:
+                add_attribute_error('unknown_attribute_superior',
+                                    attribute=reference,
+                                    superior=current,
+                                    path=path + [current])
+                break
+
+            name = self._display_name(current_definition, current)
+            if current_definition['oid'] in active:
+                add_attribute_error('attribute_inheritance_cycle',
+                                    attribute=reference,
+                                    path=path + [name])
+                break
+
+            active.add(current_definition['oid'])
+            path.append(name)
+            if not names:
+                names.extend(current_definition['names'] or [current_definition['oid']])
+            single_value = single_value or current_definition['single_value']
+            if syntax is None and current_definition.get('syntax'):
+                syntax = current_definition['syntax']
+            superior = current_definition['superior'][0] if current_definition['superior'] else None
+            if superior:
+                superior_definition = self._resolve_reference(superior, self.attribute_types, attribute_index)
+                if superior_definition is None:
+                    add_attribute_error('unknown_attribute_superior',
+                                        attribute=reference,
+                                        superior=superior,
+                                        path=path + [superior])
+                    break
+                current = superior_definition['oid']
+            else:
+                current = None
+
+        return dict(oid=oid, names=names, single_value=single_value, syntax=syntax)
+
+    @staticmethod
+    def _add_alias_dictionary(target, name, aliases, value):
+        if name not in target:
+            target[name] = value
+            valid_aliases = []
+            for alias in aliases:
+                if alias != name and alias not in target and alias not in valid_aliases:
+                    valid_aliases.append(alias)
+            if valid_aliases:
+                target.set_alias(name, valid_aliases, ignore_duplicates=True)
+
+    def _add_effective_attribute(self, result, attributes, reference, requirement, class_definition, path):
+        resolved = self._resolve_attribute(reference, attributes, result.errors)
+        class_name = self._display_name(class_definition, class_definition['oid'])
+        if resolved is None:
+            result.errors.append(dict(type='unknown_attribute',
+                                      attribute=reference,
+                                      requirement=requirement,
+                                      object_class=class_name,
+                                      path=path + [class_name]))
+            return
+
+        name = resolved['names'][0]
+        attribute = None
+        for candidate in result.attributes.values():
+            if candidate.oid == resolved['oid']:
+                attribute = candidate
+                break
+
+        if attribute is not None:
+            self._extend_unique(attribute.names, resolved['names'])
+            attribute.aliases = attribute.names[1:]
+            attribute.single_value = attribute.single_value or resolved['single_value']
+            if attribute.syntax is None:
+                attribute.syntax = resolved['syntax']
+            if attribute.definition is None:
+                attribute.definition = resolved
+        else:
+            attribute = EffectiveSchemaAttribute(resolved['oid'],
+                                                 resolved['names'],
+                                                 resolved['single_value'],
+                                                 resolved['syntax'],
+                                                 resolved)
+
+        source = EffectiveSchemaSource(requirement, class_name, list(path) + [class_name], reference)
+        source.object_class_oid = class_definition['oid']
+        source.attribute_oid = resolved['oid']
+        attribute.sources.append(source)
+        self._add_alias_dictionary(result.attributes, name, attribute.aliases + [attribute.oid], attribute)
+
+    def _collect_effective_class(self, reference, class_index, attribute_index, result, path=None, active=None):
+        if path is None:
+            path = []
+        if active is None:
+            active = set()
+
+        definition = class_index.get(reference)
+        if definition is None or not isinstance(definition, dict):
+            definition = self._resolve_reference(reference, self.object_classes, class_index)
+
+        if definition is None:
+            error_type = 'unknown_object_class' if not path else 'unknown_superior'
+            error = dict(type=error_type, path=path + [reference], reference=reference)
+            if path:
+                error['superior'] = reference
+                error['object_class'] = path[-1]
+            else:
+                error['object_class'] = reference
+            result.errors.append(error)
+            return
+
+        name = self._display_name(definition, reference)
+        current_path = path + [name]
+        if name in path:
+            result.errors.append(dict(type='object_class_inheritance_cycle',
+                                      object_class=path[0] if path else name,
+                                      path=current_path))
+            return
+
+        if definition['oid'] in active:
+            result.errors.append(dict(type='object_class_inheritance_cycle',
+                                      object_class=name,
+                                      path=current_path + [name]))
+        else:
+            active.add(definition['oid'])
+            for superior in definition['superior']:
+                self._collect_effective_class(superior, class_index, attribute_index, result,
+                                              current_path, set(active))
+
+        for attribute in definition['must']:
+            self._add_effective_attribute(result, attribute_index, attribute, 'MUST', definition, current_path[:-1])
+        for attribute in definition['may']:
+            self._add_effective_attribute(result, attribute_index, attribute, 'MAY', definition, current_path[:-1])
+
+    def get_effective_definition(self, object_classes=None, auxiliary_classes=None, strict=False):
+        """Merge MUST/MAY constraints through object class and attribute inheritance.
+
+        Returns an EffectiveSchemaDefinition even when the schema references unknown
+        parents or contains cycles. Set strict to True to raise LDAPSchemaError after
+        collecting all attributes and complete error paths.
+        """
+        object_classes = self._as_name_list(object_classes)
+        auxiliary_classes = self._as_name_list(auxiliary_classes)
+        class_index = self._schema_index(self.object_classes)
+        attribute_index = self._schema_index(self.attribute_types, include_attribute_properties=True)
+        result = EffectiveSchemaDefinition()
+
+        structural_error = self._structural_error(object_classes, class_index)
+        if structural_error:
+            result.errors.append(structural_error)
+
+        included_object_classes = []
+        included_auxiliary_classes = []
+        included_oids = set()
+        for references in (object_classes, auxiliary_classes):
+            included_classes = included_object_classes if references is object_classes else included_auxiliary_classes
+            for reference in references:
+                definition = self._resolve_reference(reference, self.object_classes, class_index)
+                if definition is None:
+                    included_classes.append(reference)
+                    continue
+                if definition['oid'] not in included_oids:
+                    included_oids.add(definition['oid'])
+                    included_classes.append(self._display_name(definition, reference))
+
+        result.object_classes = included_object_classes
+        result.auxiliary_classes = included_auxiliary_classes
+
+        for object_class in object_classes:
+            self._collect_effective_class(object_class, class_index, attribute_index, result)
+        for auxiliary_class in auxiliary_classes:
+            self._collect_effective_class(auxiliary_class, class_index, attribute_index, result)
+
+        for attribute in result.attributes.values():
+            target = result.must if attribute.mandatory else result.may
+            name = attribute.names[0]
+            self._add_alias_dictionary(target, name, attribute.aliases + [attribute.oid], attribute)
+
+        if strict and result.errors:
+            error = LDAPSchemaError('invalid effective schema definition: ' + json.dumps(result.errors, sort_keys=True))
+            error.effective_schema = result
+            raise error
+        return result
+
+    def get_effective_attributes(self, object_classes=None, auxiliary_classes=None, strict=False):
+        return self.get_effective_definition(object_classes, auxiliary_classes, strict)
+
+    def get_allowed_attributes(self, object_classes=None, auxiliary_classes=None, strict=False):
+        return self.get_effective_definition(object_classes, auxiliary_classes, strict)
+
+    def effective_definition(self, object_classes=None, auxiliary_classes=None, strict=False):
+        return self.get_effective_definition(object_classes, auxiliary_classes, strict)
+
+    def effective_object_class(self, object_classes=None, auxiliary_classes=None, strict=False):
+        return self.get_effective_definition(object_classes, auxiliary_classes, strict)
 
     def is_valid(self):
         if self.object_classes or self.attribute_types or self.matching_rules or self.matching_rule_uses or self.dit_content_rules or self.dit_structure_rules or self.name_forms or self.ldap_syntaxes:
