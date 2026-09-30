@@ -124,6 +124,8 @@ class AsyncStrategy(BaseStrategy):
                         data = b''
                     else:
                         listen = False
+                        if self.connection.strategy.can_stream and not self.connection.strategy.local_close:
+                            self.connection.strategy.remote_disconnect = True
                 length = BaseStrategy.compute_ldap_message_size(unprocessed)
                 if length == -1 or len(unprocessed) < length:
                     get_more_data = True

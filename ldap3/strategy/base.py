@@ -341,6 +341,8 @@ class BaseStrategy(object):
             if message_controls is not None:
                 ldap_message['controls'] = message_controls
             self.connection.request = BaseStrategy.decode_request(message_type, request, controls)
+            if hasattr(self, 'prepare_stream_send'):
+                self.prepare_stream_send(ldap_message)
             self._outstanding[message_id] = self.connection.request
             self.sending(ldap_message)
         else:
