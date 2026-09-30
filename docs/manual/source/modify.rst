@@ -73,8 +73,27 @@ You perform a Modify operation as in the following example (using the default sy
     # close the connection
     c.unbind()
 
+Assertion control
+-----------------
+
+The Assertion Control, defined in RFC 4528, allows the Modify operation to be performed only if the target entry
+matches a search filter evaluated against the entry *before* any change is applied. This is useful for optimistic
+concurrency control: read an attribute that acts as a "version" of the entry, then modify the entry only if the
+version has not changed in the meantime. If the filter doesn't match, the operation returns assertionFailed
+(122) and no modification at all is applied to the entry. Use the assertion_control helper to build the control::
+
+    from ldap3.protocol.rfc4528 import assertion_control
+
+    c.modify('cn=user1,ou=users,o=company',
+             {'sn': [(MODIFY_REPLACE, ['sn-replaced'])]},
+             controls=[assertion_control('(revision=1)')])
+
+The control is critical by default (as per RFC 4528 the criticality SHOULD be TRUE); a server that doesn't recognize
+a critical control must reject the operation with unavailableCriticalExtension (12). The MOCK_SYNC and MOCK_ASYNC
+strategies honor the Assertion Control and evaluate the filter against the entry stored in the mock DIT.
+
 Extended logging
-----------------
+-----------------
 
 To get an idea of what happens when you perform a Modify operation this is the extended log from a session to an OpenLdap
 server from a Windows client with dual stack IP::

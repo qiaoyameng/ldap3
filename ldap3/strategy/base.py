@@ -59,6 +59,7 @@ from ..core.tls import Tls
 from ..protocol.oid import Oids
 from ..protocol.rfc2696 import RealSearchControlValue
 from ..protocol.microsoft import DirSyncControlResponseValue
+from ..protocol.rfc4528 import decode_assertion_control_value
 from ..utils.log import log, log_enabled, ERROR, BASIC, PROTOCOL, NETWORK, EXTENDED, format_ldap_message
 from ..utils.asn1 import encode, decoder, ldap_result_to_dict_fast, decode_sequence
 from ..utils.conv import to_unicode
@@ -597,7 +598,7 @@ class BaseStrategy(object):
         """
         control_type = str(control['controlType'])
         criticality = bool(control['criticality'])
-        control_value = bytes(control['controlValue'])
+        control_value = bytes(control['controlValue']) if control['controlValue'].isValue else None
         unprocessed = None
         if control_type == '1.2.840.113556.1.4.319':  # simple paged search as per RFC2696
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=RealSearchControlValue())
@@ -613,6 +614,8 @@ class BaseStrategy(object):
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SearchResultEntry())
             control_value = dict()
             control_value['result'] = attributes_to_dict(control_resp['attributes'])
+        elif control_type == '1.3.6.1.1.12':  # Assertion Control as per RFC 4528
+            control_value = decode_assertion_control_value(control_value)
         if unprocessed:
             if log_enabled(ERROR):
                 log(ERROR, 'unprocessed control response in substrate')
