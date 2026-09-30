@@ -176,6 +176,10 @@ class Connection(object):
     :type cred_store: dict
     :param use_referral_cache: keep referral connections open and reuse them
     :type use_referral_cache: bool
+    :param referral_target_policy: callback used before following a referral
+    :type referral_target_policy: callable
+    :param max_referral_hops: maximum referrals followed for one operation
+    :type max_referral_hops: int
     :param auto_escape: automatic escaping of filter values
     :type auto_escape: bool
     :param auto_encode: automatic encoding of attribute values
@@ -214,6 +218,8 @@ class Connection(object):
                  receive_timeout=None,
                  return_empty_attributes=True,
                  use_referral_cache=False,
+                 referral_target_policy=None,
+                 max_referral_hops=None,
                  auto_escape=True,
                  auto_encode=True,
                  pool_keepalive=None,
@@ -290,6 +296,8 @@ class Connection(object):
             self.receive_timeout = receive_timeout
             self.empty_attributes = return_empty_attributes
             self.use_referral_cache = use_referral_cache
+            self.referral_target_policy = referral_target_policy
+            self.max_referral_hops = max_referral_hops
             self.auto_escape = auto_escape
             self.auto_encode = auto_encode
             self._digest_md5_kic = None

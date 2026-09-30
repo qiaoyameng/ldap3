@@ -11,13 +11,17 @@ The Server object specifies the DSA (Directory Server Agent) LDAP server that wi
 
 * use_ssl: specifies if the connection is on a secure port (defaults to False). When True the secure port is usually set to 636.
 
-* allowed_referral_hosts: specifies which servers are considered reliable as referrals (defaults to None)
+* allowed_referral_hosts: specifies which servers are considered reliable as referrals (defaults to anonymous access to any host)
 
     * Format is a list of tuples; [(server, allow_auth), (server, allow_auth), ...]
 
     * server is an IP address or DNS name. Specify an asterisk (*) to accept any server.
 
-    * allow_auth is a boolean to indicate if authentication to that server is allowed; if False only anonymous bind will be used.
+    * allow_auth is a boolean to indicate if authentication to that server is allowed; if False only anonymous bind will be used. The original credentials are never sent to a different host unless a referral target policy explicitly returns credentials for that target.
+
+* referral_target_policy: callback invoked before following a referral. It receives ``host``, ``port``, ``tls`` and the normalized ``chain`` of already contacted endpoints. Return ``REFERRAL_DENY``/False to reject, ``REFERRAL_ANONYMOUS``/None for an anonymous bind, ``REFERRAL_USE_CREDENTIALS``/True to explicitly inherit the current credentials, or a ``(user, password)`` tuple / credential dictionary to authenticate to the target.
+
+* max_referral_hops: maximum number of referrals followed for one LDAP operation, including nested referrals (defaults to 10). Repeated endpoints in the chain are treated as a cycle.
 
 * get_info: specifies if the server schema and server specific info must be read (defaults to SCHEMA). Possible values are:
 

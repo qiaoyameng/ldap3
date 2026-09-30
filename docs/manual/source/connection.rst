@@ -100,6 +100,10 @@ Connection parameters are:
 
 * use_referral_cache: when True referral connections are not immediately closed, and kept in a cache should another request need to contact the same server
 
+* referral_target_policy: callback used to reject, anonymously follow, or provide credentials for a normalized referral target
+
+* max_referral_hops: maximum referrals followed while processing a single LDAP operation (defaults to 10)
+
 * auto_escape: automatically applies LDAP encoding to filter values, default to True
 
 * auto_encode: automatically tries to convert from local encoding to UTF8 for well known syntaxes and types, default to True

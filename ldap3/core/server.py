@@ -65,6 +65,10 @@ class Server(object):
     Per RFC 4516. Use [('*', False)] to allow any host with anonymous
     bind, use [('*', True)] to allow any host with same authentication of
     Server.
+
+    referral_target_policy receives normalized host, port, TLS information and
+    the referral chain. Return False to reject, None to connect anonymously,
+    or credentials to use for the target.
     """
 
     _message_counter = 0
@@ -80,7 +84,9 @@ class Server(object):
                  formatter=None,
                  connect_timeout=None,
                  mode=IP_V6_PREFERRED,
-                 validator=None):
+                 validator=None,
+                 referral_target_policy=None,
+                 max_referral_hops=10):
 
         self.ipc = False
         url_given = False
@@ -155,8 +161,8 @@ class Server(object):
                 raise LDAPInvalidPortError(port_err)
             self.port = port
 
-        if allowed_referral_hosts is None:  # defaults to any server with authentication
-            allowed_referral_hosts = [('*', True)]
+        if allowed_referral_hosts is None:  # defaults to any server with an anonymous referral bind
+            allowed_referral_hosts = [('*', False)]
 
         if isinstance(allowed_referral_hosts, SEQUENCE_TYPES):
             self.allowed_referral_hosts = []
@@ -192,6 +198,8 @@ class Server(object):
         self.dit_lock = Lock()
         self.custom_formatter = formatter
         self.custom_validator = validator
+        self.referral_target_policy = referral_target_policy
+        self.max_referral_hops = max_referral_hops
         self._address_info = []  # property self.address_info resolved at open time (or when check_availability is called)
         self._address_info_resolved_time = datetime(MINYEAR, 1, 1)  # smallest date ever
         self.current_address = None
@@ -677,6 +685,4 @@ class Server(object):
 
     def has_feature(self, feature):
         return self._check_info_property('feature', feature)
-
-
 

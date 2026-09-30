@@ -79,8 +79,18 @@ def paged_search_generator(connection,
         if result['referrals'] and original_auto_referrals:  # if rererrals are returned start over the loop with a new connection to the referral
             if not original_connection:
                 original_connection = connection
-            _, connection, cachekey = connection.strategy.create_referral_connection(result['referrals'])   # change connection to a valid referrals
-            continue
+            selected_referral, referral_connection, cachekey = connection.strategy.create_referral_connection(result['referrals'])   # change connection to a valid referrals
+            if selected_referral:
+                connection = referral_connection
+                continue
+            request = {'type': 'searchRequest',
+                       'base': search_base,
+                       'filter': search_filter,
+                       'scope': search_scope}
+            reason = connection.strategy._referral_limits_exceeded or connection.last_error or 'no valid referral target'
+            result = connection.strategy._referral_error(request, result, reason)
+            responses.extend(response)
+            break
 
         responses.extend(response)
         try:
@@ -99,12 +109,15 @@ def paged_search_generator(connection,
         while responses:
             yield responses.pop()
 
+    referral_connection = connection
     if original_connection:
         connection = original_connection
         if connection.use_referral_cache and cachekey:
-            connection.strategy.referral_cache[cachekey] = connection
-        else:
-            connection.unbind()
+            connection.strategy.referral_cache[cachekey] = referral_connection
+        elif referral_connection:
+            referral_connection.unbind()
+
+    connection.strategy._referral_chain = []
 
     connection.auto_referrals = original_auto_referrals
     connection.response = None
