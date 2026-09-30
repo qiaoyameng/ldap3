@@ -48,6 +48,8 @@ from .standard.whoAmI import WhoAmI
 from .standard.modifyPassword import ModifyPassword
 from .standard.PagedSearch import paged_search_generator, paged_search_accumulator
 from .standard.PersistentSearch import PersistentSearch
+from .standard.persistentSearchEvents import PersistentSearchEventStream
+from ..strategy.persistentSearchEvents import QUEUE_BLOCK
 
 
 class ExtendedOperationContainer(object):
@@ -170,6 +172,41 @@ class StandardExtendedOperations(ExtendedOperationContainer):
                                 notifications,
                                 streaming,
                                 callback)
+
+    def persistent_search_events(self,
+                                 search_base='',
+                                 search_filter='(objectclass=*)',
+                                 search_scope=SUBTREE,
+                                 dereference_aliases=DEREF_NEVER,
+                                 attributes=ALL_ATTRIBUTES,
+                                 size_limit=0,
+                                 time_limit=0,
+                                 controls=None,
+                                 changes_only=False,
+                                 show_additions=True,
+                                 show_deletions=True,
+                                 show_modifications=True,
+                                 show_dn_modifications=True,
+                                 queue_size=None,
+                                 queue_overflow=QUEUE_BLOCK,
+                                 on_queue_overflow=None):
+        return PersistentSearchEventStream(self._connection,
+                                           search_base,
+                                           search_filter,
+                                           search_scope,
+                                           dereference_aliases,
+                                           attributes,
+                                           size_limit,
+                                           time_limit,
+                                           controls,
+                                           changes_only,
+                                           show_additions,
+                                           show_deletions,
+                                           show_modifications,
+                                           show_dn_modifications,
+                                           queue_size,
+                                           queue_overflow,
+                                           on_queue_overflow)
 
     def funnel_search(self,
                       search_base='',

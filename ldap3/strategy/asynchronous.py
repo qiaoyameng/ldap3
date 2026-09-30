@@ -66,6 +66,7 @@ class AsyncStrategy(BaseStrategy):
             unprocessed = b''
             get_more_data = True
             listen = True
+            received_eof = False
             data = b''
             sasl_total_bytes_recieved = 0
             sasl_received_data = b''  # used to verify the signature, typo GC
@@ -123,10 +124,21 @@ class AsyncStrategy(BaseStrategy):
                             unprocessed += data
                         data = b''
                     else:
-                        listen = False
+                        while True:
+                            try:
+                                buffered_data = self.connection.socket.recv(self.socket_size)
+                            except (OSError, socket.error, AttributeError):
+                                break
+                            if not buffered_data:
+                                break
+                            unprocessed += buffered_data
+                        received_eof = True
+                        get_more_data = False
                 length = BaseStrategy.compute_ldap_message_size(unprocessed)
                 if length == -1 or len(unprocessed) < length:
-                    get_more_data = True
+                    get_more_data = not received_eof
+                    if received_eof:
+                        listen = False
                 elif len(unprocessed) >= length:  # add message to message list
                     if self.connection.usage:
                         self.connection._usage.update_received_message(length)
@@ -159,6 +171,7 @@ class AsyncStrategy(BaseStrategy):
                             raise LDAPStartTLSError(self.connection.last_error)
                         del self.connection._awaiting_for_async_start_tls
                     if message_id != 0:  # 0 is reserved for 'Unsolicited Notification' from server as per RFC4511 (paragraph 4.4)
+                        accepted = True
                         with self.connection.strategy.async_lock:
                             if message_id in self.connection.strategy._responses:
                                 self.connection.strategy._responses[message_id].append(dict_response)
@@ -169,10 +182,13 @@ class AsyncStrategy(BaseStrategy):
                                 self.connection.strategy.set_event_for_message(message_id)
 
                         if self.connection.strategy.can_stream:  # for AsyncStreamStrategy, used for PersistentSearch
-                            self.connection.strategy.accumulate_stream(message_id, dict_response)
+                            accepted = self.connection.strategy.accumulate_stream(message_id, dict_response)
                         unprocessed = unprocessed[length:]
                         get_more_data = False if unprocessed else True
-                        listen = True if self.connection.listening or unprocessed else False
+                        if unprocessed:
+                            listen = True
+                        else:
+                            listen = False if accepted is False else (True if self.connection.listening else False)
                     else:  # Unsolicited Notification
                         if dict_response['responseName'] == '1.3.6.1.4.1.1466.20036':  # Notice of Disconnection as per RFC4511 (paragraph 4.4.1)
                             listen = False
@@ -181,7 +197,11 @@ class AsyncStrategy(BaseStrategy):
                             if log_enabled(ERROR):
                                 log(ERROR, '<%s> for <%s>', self.connection.last_error, self.connection)
                             raise LDAPStartTLSError(self.connection.last_error)
-            self.connection.strategy.close()
+            if not received_eof or not unprocessed:
+                self.connection.strategy.close()
+            if self.connection.strategy.can_stream:
+                self.connection.strategy.complete_disconnected_persistent_searches()
+                self.connection.strategy.complete_overflowing_persistent_searches()
 
     def __init__(self, ldap_connection):
         BaseStrategy.__init__(self, ldap_connection)

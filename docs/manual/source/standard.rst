@@ -215,6 +215,26 @@ Each call to p.next(block=False, timeout=None) returns one event, with the exten
 
 When using next(block=False) or next(block=True, timeout=10) the method returns None if nothing is received from the server.
 
+If you need to keep the initial snapshot separate from subsequent changes, use ``persistent_search_events``.
+The iterator yields ``PersistentSearchEvent`` objects and stops on a real terminal condition; a timed-out poll still returns
+``None`` and never looks like a closed search.
+
+::
+
+    stream = c.extend.standard.persistent_search_events(base, changes_only=False)
+    for event in stream.events():
+        print(event.phase, event.change_type, event.dn, event.previous_dn, event.change_number)
+    print(stream.close_reason)
+
+Initial entries have ``phase`` set to ``initial`` and ``change_type`` set to ``None``. Change events use
+``add``, ``delete``, ``modify`` or ``moddn``; ``previous_dn`` (also available as ``old_dn``) is populated for
+rename operations, and ``raw_response`` keeps the decoded response dictionary for diagnostics.
+
+The event queue size is configured with ``queue_size``. The default ``queue_overflow='block'`` applies back-pressure
+to the receiver thread. Use ``queue_overflow='error'`` to finish iteration with
+``LDAPPersistentSearchQueueOverflowError`` instead; an ``on_queue_overflow`` callback receives the event that could not
+be enqueued. Events are never silently discarded.
+
 If you call the persistent_search() method with **callback=myfunction** (where myfunction is a callable, including lambda,
 accepting a dict as parameter) your function will be called for each event received in the persistent serach.
 The function will be called in the same thread of the persistent search, so it should not block.

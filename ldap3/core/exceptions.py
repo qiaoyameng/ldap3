@@ -478,6 +478,10 @@ class LDAPExtensionError(LDAPExceptionError, ValueError):
     pass
 
 
+class LDAPPersistentSearchQueueOverflowError(LDAPExceptionError):
+    pass
+
+
 class LDAPLDIFError(LDAPExceptionError):
     pass
 
