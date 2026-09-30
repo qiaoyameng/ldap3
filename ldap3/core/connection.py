@@ -64,6 +64,7 @@ from ..operation.unbind import unbind_operation
 from ..protocol.rfc2696 import paged_search_control
 from .usage import ConnectionUsage
 from .tls import Tls
+from .referral import DEFAULT_REFERRAL_HOP_LIMIT
 from .exceptions import LDAPUnknownStrategyError, LDAPBindError, LDAPUnknownAuthenticationMethodError, \
     LDAPSASLMechanismNotSupportedError, LDAPObjectClassError, LDAPConnectionIsReadOnlyError, LDAPChangeError, LDAPExceptionError, \
     LDAPObjectError, LDAPSocketReceiveError, LDAPAttributeError, LDAPInvalidValueError, LDAPInvalidPortError, LDAPStartTLSError, \
@@ -176,6 +177,10 @@ class Connection(object):
     :type cred_store: dict
     :param use_referral_cache: keep referral connections open and reuse them
     :type use_referral_cache: bool
+    :param referral_policy: callback receiving host, port, TLS state and the current target chain; return REFERRAL_REJECT, REFERRAL_ANONYMOUS, or REFERRAL_USE_CREDENTIALS with explicit credentials
+    :type referral_policy: callable
+    :param referral_hop_limit: maximum number of referrals followed by one LDAP operation
+    :type referral_hop_limit: int
     :param auto_escape: automatic escaping of filter values
     :type auto_escape: bool
     :param auto_encode: automatic encoding of attribute values
@@ -214,6 +219,8 @@ class Connection(object):
                  receive_timeout=None,
                  return_empty_attributes=True,
                  use_referral_cache=False,
+                 referral_policy=None,
+                 referral_hop_limit=DEFAULT_REFERRAL_HOP_LIMIT,
                  auto_escape=True,
                  auto_encode=True,
                  pool_keepalive=None,
@@ -290,6 +297,15 @@ class Connection(object):
             self.receive_timeout = receive_timeout
             self.empty_attributes = return_empty_attributes
             self.use_referral_cache = use_referral_cache
+            self.referral_policy = referral_policy
+            if referral_hop_limit is None:
+                referral_hop_limit = DEFAULT_REFERRAL_HOP_LIMIT
+            if not isinstance(referral_hop_limit, int) or referral_hop_limit < 0:
+                self.last_error = 'referral hop limit must be a non-negative integer'
+                if log_enabled(ERROR):
+                    log(ERROR, '%s for <%s>', self.last_error, self)
+                raise LDAPInvalidValueError(self.last_error)
+            self.referral_hop_limit = referral_hop_limit
             self.auto_escape = auto_escape
             self.auto_encode = auto_encode
             self._digest_md5_kic = None
@@ -486,6 +502,8 @@ class Connection(object):
         r += '' if self.auto_encode is None else (', auto_encode=' + ('True' if self.auto_encode else 'False'))
         r += '' if self.auto_escape is None else (', auto_escape=' + ('True' if self.auto_escape else 'False'))
         r += '' if self.use_referral_cache is None else (', use_referral_cache=' + ('True' if self.use_referral_cache else 'False'))
+        r += '' if self.referral_policy is None else ', referral_policy={0.referral_policy!r}'.format(self)
+        r += '' if self.referral_hop_limit is None else ', referral_hop_limit={0.referral_hop_limit!r}'.format(self)
         r += ')'
 
         return r
@@ -526,6 +544,8 @@ class Connection(object):
         r += '' if self.auto_encode is None else (', auto_encode=' + ('True' if self.auto_encode else 'False'))
         r += '' if self.auto_escape is None else (', auto_escape=' + ('True' if self.auto_escape else 'False'))
         r += '' if self.use_referral_cache is None else (', use_referral_cache=' + ('True' if self.use_referral_cache else 'False'))
+        r += '' if self.referral_policy is None else ', referral_policy={0.referral_policy!r}'.format(self)
+        r += '' if self.referral_hop_limit is None else ', referral_hop_limit={0.referral_hop_limit!r}'.format(self)
         r += ')'
 
         return r

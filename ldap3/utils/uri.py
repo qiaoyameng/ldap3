@@ -89,17 +89,28 @@ def parse_uri(uri):
     address, _, uri_components['base'] = remain.partition('/')
 
     uri_components['ssl'] = True if scheme == 'ldaps' else False
-    uri_components['host'], sep, uri_components['port'] = address.partition(':')
-    if sep != ':':
-        if uri_components['ssl']:
-            uri_components['port'] = 636
-        else:
-            uri_components['port'] = None
-    else:
-        if not uri_components['port'].isdigit() or not (0 < int(uri_components['port']) < 65536):
+    if address.startswith('['):
+        uri_components['host'], sep, port_text = address[1:].partition(']')
+        if not sep:
             return None
-        else:
-            uri_components['port'] = int(uri_components['port'])
+        if port_text:
+            if not port_text.startswith(':'):
+                return None
+            port_text = port_text[1:]
+    else:
+        uri_components['host'], sep, port_text = address.partition(':')
+        if sep and (not port_text or not port_text.isdigit()):
+            return None
+
+    if not port_text:
+        uri_components['port'] = 636 if uri_components['ssl'] else 389
+    elif not port_text.isdigit() or not (0 < int(port_text) < 65536):
+        return None
+    else:
+        uri_components['port'] = int(port_text)
+
+    if not uri_components['host']:
+        return None
 
     uri_components['attributes'] = parts[1].split(',') if len(parts) > 1 and parts[1] else None
     uri_components['scope'] = parts[2] if len(parts) > 2 else None

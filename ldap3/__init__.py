@@ -148,6 +148,8 @@ from .core.connection import Connection
 from .core.tls import Tls
 from .core.pooling import ServerPool
 from .core.rdns import ReverseDnsSetting
+from .core.referral import REFERRAL_REJECT, REFERRAL_ANONYMOUS, REFERRAL_USE_CREDENTIALS,\
+    DEFAULT_REFERRAL_HOP_LIMIT
 from .abstract.objectDef import ObjectDef
 from .abstract.attrDef import AttrDef
 from .abstract.attribute import Attribute, WritableAttribute, OperationalAttribute

@@ -100,11 +100,17 @@ Connection parameters are:
 
 * use_referral_cache: when True referral connections are not immediately closed, and kept in a cache should another request need to contact the same server
 
+* referral_policy: an optional callback invoked with the normalized referral host, port, TLS state and the already-followed target chain. It can return ``REFERRAL_REJECT``, ``REFERRAL_ANONYMOUS``, or ``(REFERRAL_USE_CREDENTIALS, {'user': ..., 'password': ...})``. When no callback is supplied, the original password is not sent to a different host.
+
+* referral_hop_limit: maximum number of referrals followed while processing one LDAP operation, including referrals reached through earlier referral connections (defaults to 10).
+
 * auto_escape: automatically applies LDAP encoding to filter values, default to True
 
 * auto_encode: automatically tries to convert from local encoding to UTF8 for well known syntaxes and types, default to True
 
 * channel_binding: enable Channel Binding. Currently only TLS_CHANNEL_BINDING is implemented and this parameter is only available when using NTLM authentication done over TLS.
+
+Referral targets received while already using TLS are not silently downgraded to cleartext: an ``ldap://`` referral reached through TLS uses StartTLS before binding. Port 389 and no port are equivalent for ``ldap://`` targets, and port 636 and no port are equivalent for ``ldaps://`` targets when detecting loops.
 
 .. note::
    The *auto_range* feature is very useful when searching Active Directory servers. When an Active Directory search returns more than 1000 entries this feature is automatically used by the server.
