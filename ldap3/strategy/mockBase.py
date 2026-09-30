@@ -45,7 +45,8 @@ from ..utils.conv import json_hook, to_unicode, to_raw
 from ..core.exceptions import LDAPDefinitionError, LDAPPasswordIsMandatoryError, LDAPInvalidValueError, LDAPSocketOpenError
 from ..core.results import RESULT_SUCCESS, RESULT_OPERATIONS_ERROR, RESULT_UNAVAILABLE_CRITICAL_EXTENSION, \
     RESULT_INVALID_CREDENTIALS, RESULT_NO_SUCH_OBJECT, RESULT_ENTRY_ALREADY_EXISTS, RESULT_COMPARE_TRUE, \
-    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN
+    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN, \
+    RESULT_ASSERTION_FAILED
 from ..utils.ciDict import CaseInsensitiveDict
 from ..utils.dn import to_dn, safe_dn, safe_rdn
 from ..protocol.sasl.sasl import validate_simple_password
@@ -115,6 +116,8 @@ from ..protocol.convert import build_controls_list
 # noinspection PyProtectedMember,PyUnresolvedReferences
 
 SEARCH_CONTROLS = ['1.2.840.113556.1.4.319'  # simple paged search [RFC 2696]
+                   ]
+MODIFY_CONTROLS = ['1.3.6.1.1.12'  # assertion control [RFC 4528]
                    ]
 SERVER_ENCODING = 'utf-8'
 
@@ -501,10 +504,31 @@ class MockBaseStrategy(object):
         request = modify_request_to_dict(request_message)
         dn = safe_dn(request['entry'])
         changes = request['changes']
+        assertion_filter = None
+        if controls:
+            decoded_controls = [self.decode_control(control) for control in controls if control]
+            for decoded_control in decoded_controls:
+                if decoded_control[1]['criticality'] and decoded_control[0] not in MODIFY_CONTROLS:
+                    message = 'Critical requested control ' + str(decoded_control[0]) + ' not available'
+                    return {'resultCode': RESULT_UNAVAILABLE_CRITICAL_EXTENSION,
+                            'matchedDN': '',
+                            'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
+                            'referral': None
+                            }
+                elif decoded_control[0] == '1.3.6.1.1.12':  # Assertion control [RFC 4528]
+                    assertion_filter = decoded_control[1]['value']['filter']
         result_code = 0
         message = ''
         rdns = [rdn[0] for rdn in safe_rdn(dn, decompose=True)]
         if dn in self.connection.server.dit:
+            if assertion_filter is not None:  # the assertion is evaluated against the entry before any modification is applied
+                filter_root = parse_filter(assertion_filter, self.connection.server.schema, auto_escape=True, auto_encode=False, validator=self.connection.server.custom_validator, check_names=self.connection.check_names)
+                if dn not in self.evaluate_filter_node(filter_root, [dn]):
+                    return {'resultCode': RESULT_ASSERTION_FAILED,
+                            'matchedDN': '',
+                            'diagnosticMessage': to_unicode('assertion failed', SERVER_ENCODING),
+                            'referral': None
+                            }
             entry = self.connection.server.dit[dn]
             original_entry = entry.copy()  # to preserve atomicity of operation
             for modification in changes:

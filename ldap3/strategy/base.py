@@ -46,6 +46,7 @@ from ..operation.modify import modify_request_to_dict, modify_response_to_dict
 from ..operation.search import search_result_reference_response_to_dict, search_result_done_response_to_dict,\
     search_result_entry_response_to_dict, search_request_to_dict, search_result_entry_response_to_dict_fast,\
     search_result_reference_response_to_dict_fast, attributes_to_dict, attributes_to_dict_fast
+from ..protocol.rfc4528 import assertion_control_value_to_string
 from ..operation.bind import bind_response_to_dict, bind_request_to_dict, sicily_bind_response_to_dict, bind_response_to_dict_fast, \
     sicily_bind_response_to_dict_fast
 from ..operation.compare import compare_response_to_dict, compare_request_to_dict
@@ -597,7 +598,7 @@ class BaseStrategy(object):
         """
         control_type = str(control['controlType'])
         criticality = bool(control['criticality'])
-        control_value = bytes(control['controlValue'])
+        control_value = bytes(control['controlValue']) if control['controlValue'].isValue else None
         unprocessed = None
         if control_type == '1.2.840.113556.1.4.319':  # simple paged search as per RFC2696
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=RealSearchControlValue())
@@ -613,6 +614,8 @@ class BaseStrategy(object):
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SearchResultEntry())
             control_value = dict()
             control_value['result'] = attributes_to_dict(control_resp['attributes'])
+        elif control_type == '1.3.6.1.1.12':  # Assertion control as per RFC 4528
+            control_value = {'filter': assertion_control_value_to_string(control_value)}
         if unprocessed:
             if log_enabled(ERROR):
                 log(ERROR, 'unprocessed control response in substrate')
@@ -647,6 +650,8 @@ class BaseStrategy(object):
             control_resp = decode_sequence(control_value, 0, len(control_value))
             control_value = dict()
             control_value['result'] = attributes_to_dict_fast(control_resp[0][3][1][3])
+        elif control_type == '1.3.6.1.1.12':  # Assertion control as per RFC 4528
+            control_value = {'filter': assertion_control_value_to_string(control_value)}
         return control_type, {'description': Oids.get(control_type, ''), 'criticality': criticality, 'value': control_value}
 
     @staticmethod

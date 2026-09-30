@@ -1,3 +1,8 @@
+# 2.10.2rc5 . 2026.09.30
+    - added Assertion control as per RFC 4528 (ldap3.protocol.rfc4528.assertion_control)
+    - MOCK_SYNC and MOCK_ASYNC strategies now evaluate the Assertion control in modify operations and return assertionFailed (122) when the filter doesn't match the entry before modification
+    - mock modify operation rejects unsupported critical controls with unavailableCriticalExtension (12)
+
 # 2.10.2rc4 . 2026.04.18
     - fixed IndexError in auto_range search when response has no ranged attributes
     - fixed TypeError in format_ad_timedelta with malformed AD timestamps
