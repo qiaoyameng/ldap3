@@ -154,3 +154,5 @@ from .abstract.attribute import Attribute, WritableAttribute, OperationalAttribu
 from .abstract.entry import Entry, WritableEntry
 from .abstract.cursor import Reader, Writer
 from .protocol.rfc4512 import DsaInfo, SchemaInfo
+from .abstract.effectiveSchema import get_effective_schema, EffectiveSchemaDefinition, \
+    EffectiveAttributeDefinition, SchemaIssue, LDAPEffectiveSchemaError

@@ -102,3 +102,44 @@ want to query *inetOrgPerson* in a Reader Cursor of the Abstraction Layer::
     r.serch()
 
 when you query the ``r`` cursor you'll get back the missing attributes too.
+
+Computing the effective schema of a set of object classes
+---------------------------------------------------------
+Before creating an entry it can be useful to know which attributes are actually allowed by the combination of
+structural and auxiliary object classes you plan to put in its ``objectClass`` attribute. The
+``get_effective_schema`` function (also available as the ``SchemaInfo.get_effective_schema`` method) computes this
+effective definition entirely offline, starting from a schema already read by ldap3::
+
+    from ldap3 import Server, Connection, OFFLINE_SLAPD_2_4, get_effective_schema
+
+    server = Server('my_server', get_info=OFFLINE_SLAPD_2_4)  # no connection to a directory is required
+    connection = Connection(server)
+    connection.refresh_server_info()
+    effective = get_effective_schema(server.schema, 'inetOrgPerson', auxiliary_classes=['mailRecipient'])
+
+    for attribute in effective.mandatory_attributes.values():  # attributes required (MUST) in the whole SUP chain
+        print(attribute.name, attribute.single_value, attribute.syntax, attribute.sources)
+
+    print(sorted(effective.optional_attributes))  # optional attributes (MAY)
+
+The function walks each requested structural/abstract class and each auxiliary class up their whole ``SUP``
+inheritance chain and merges their ``MUST``/``MAY`` attribute lists. An attribute declared as ``MUST`` in any class
+is mandatory even if declared as ``MAY`` elsewhere. Aliases and OIDs that refer to the same attribute type are
+merged into a single :class:`~ldap3.abstract.effectiveSchema.EffectiveAttributeDefinition`; the ``sources``
+attribute keeps every object class (with the full inheritance path and the ``must``/``may`` requirement) that
+grants the attribute, so provenance is still visible. Attribute type properties (``SINGLE-VALUE``, ``SYNTAX``,
+matching rules, usage, ...) are resolved following the attribute type ``SUP`` chain; the class that introduced the
+``SINGLE-VALUE`` constraint is available in ``single_value_source``.
+
+Problems found while resolving the schema are never hidden: multiple incompatible structural classes (structural
+classes not on the same inheritance branch), unknown object classes, unknown ``SUP`` parents (for object classes
+and attribute types) and inheritance cycles are all collected, each with the complete path involved, and raised
+together in an :class:`~ldap3.abstract.effectiveSchema.LDAPEffectiveSchemaError` (whose ``issues`` attribute lists
+every :class:`~ldap3.abstract.effectiveSchema.SchemaIssue` and ``effective_schema`` keeps the partially computed
+definition - attributes reached before the problem are not dropped). Call with ``strict=False`` to get the
+definition with its ``issues`` list instead of raising::
+
+    effective = server.schema.get_effective_schema(['inetOrgPerson', 'device'], strict=False)
+    if not effective.is_valid:
+        for issue in effective.issues:
+            print(issue.code, issue.message, issue.paths)

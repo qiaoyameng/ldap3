@@ -319,6 +319,15 @@ class SchemaInfo(BaseServerInfo):
                     except KeyError:
                         pass
 
+    def get_effective_schema(self, object_classes, auxiliary_classes=None, strict=True):
+        """Compute the effective attribute set allowed for the given object classes.
+
+        See :func:`ldap3.abstract.effectiveSchema.get_effective_schema` for the
+        full documentation. Works offline on this SchemaInfo instance.
+        """
+        from ..abstract.effectiveSchema import get_effective_schema
+        return get_effective_schema(self, object_classes, auxiliary_classes=auxiliary_classes, strict=strict)
+
     def is_valid(self):
         if self.object_classes or self.attribute_types or self.matching_rules or self.matching_rule_uses or self.dit_content_rules or self.dit_structure_rules or self.name_forms or self.ldap_syntaxes:
             return True
