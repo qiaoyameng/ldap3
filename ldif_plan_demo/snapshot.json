@@ -1,0 +1,48 @@
+{
+  "dc=example,dc=com": {
+    "objectClass": ["top", "domain"],
+    "dc": ["example"],
+    "description": ["Example root"]
+  },
+  "ou=people,dc=example,dc=com": {
+    "objectClass": ["top", "organizationalUnit"],
+    "ou": ["people"]
+  },
+  "cn=Alice Zhang,ou=people,dc=example,dc=com": {
+    "objectClass": ["top", "person", "organizationalPerson", "inetOrgPerson"],
+    "cn": ["Alice Zhang"],
+    "sn": ["Zhang"],
+    "mail": ["alice@example.com", "ali@example.com"],
+    "title": ["Engineer"],
+    "jpegPhoto": [{"type": "binary", "base64": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAC//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AfwD//2Q=="}],
+    "description": [" starts with a leading space", "multibyte: 变更"]
+  },
+  "cn=Bob Li,ou=people,dc=example,dc=com": {
+    "objectClass": ["top", "person", "organizationalPerson", "inetOrgPerson"],
+    "cn": ["Bob Li"],
+    "sn": ["Li"],
+    "mail": ["bob@example.com"],
+    "title": ["Manager", "Architect"]
+  },
+  "cn=Old Group,ou=people,dc=example,dc=com": {
+    "objectClass": ["top", "groupOfNames"],
+    "cn": ["Old Group"],
+    "member": ["cn=Alice Zhang,ou=people,dc=example,dc=com"]
+  },
+  "ou=staging,dc=example,dc=com": {
+    "objectClass": ["top", "organizationalUnit"],
+    "ou": ["staging"]
+  },
+  "cn=Carol Wu,ou=staging,dc=example,dc=com": {
+    "objectClass": ["top", "person"],
+    "cn": ["Carol Wu"],
+    "sn": ["Wu"]
+  },
+  "cn=Empty Attr,ou=people,dc=example,dc=com": {
+    "objectClass": ["top", "person", "inetOrgPerson"],
+    "cn": ["Empty Attr"],
+    "sn": ["X"],
+    "employeeNumber": ["TEMP-1"],
+    "roomNumber": ["42"]
+  }
+}

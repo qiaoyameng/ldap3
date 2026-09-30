@@ -1,0 +1,78 @@
+[
+  {
+    "operation": "modify",
+    "dn": "cn=Alice Zhang,ou=people,dc=example,dc=com",
+    "changes": [
+      {"operation": "add", "attribute": "mail", "values": ["alice.z@example.com"]},
+      {"operation": "add", "attribute": "telephoneNumber", "values": ["+86 10 1234"]},
+      {"operation": "delete", "attribute": "mail", "values": ["ali@example.com"]},
+      {"operation": "delete", "attribute": "description", "values": ["multibyte: 变更"]}
+    ]
+  },
+  {
+    "operation": "modify",
+    "dn": "cn=Bob Li,ou=people,dc=example,dc=com",
+    "changes": [
+      {"operation": "replace", "attribute": "title", "values": ["Director"]},
+      {"operation": "replace", "attribute": "jpegPhoto",
+       "values": [{"type": "binary", "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}]},
+      {"operation": "replace", "attribute": "roomNumber", "values": []},
+      {"operation": "replace", "attribute": "employeeNumber", "values": ["E-99"]}
+    ]
+  },
+  {
+    "operation": "add",
+    "dn": "cn=Dora Chen,ou=people,dc=example,dc=com",
+    "attributes": {
+      "objectClass": ["top", "person", "inetOrgPerson"],
+      "cn": ["Dora Chen"],
+      "sn": ["Chen"],
+      "mail": ["dora@example.com"]
+    }
+  },
+  {
+    "operation": "moddn",
+    "dn": "cn=Old Group,ou=people,dc=example,dc=com",
+    "newrdn": "cn=New Group",
+    "deleteoldrdn": true
+  },
+  {
+    "operation": "moddn",
+    "dn": "cn=Carol Wu,ou=staging,dc=example,dc=com",
+    "newrdn": "cn=Carol Wu",
+    "deleteoldrdn": false,
+    "newsuperior": "ou=people,dc=example,dc=com"
+  },
+  {
+    "operation": "modify",
+    "dn": "cn=Empty Attr,ou=people,dc=example,dc=com",
+    "changes": [
+      {"operation": "delete", "attribute": "employeeNumber", "values": []},
+      {"operation": "replace", "attribute": "roomNumber", "values": ["7", "8"]}
+    ]
+  },
+  {
+    "operation": "modify",
+    "dn": "cn=Ghost User,ou=people,dc=example,dc=com",
+    "changes": [
+      {"operation": "add", "attribute": "mail", "values": ["ghost@example.com"]}
+    ]
+  },
+  {
+    "operation": "delete",
+    "dn": "ou=staging,dc=example,dc=com"
+  },
+  {
+    "operation": "passwordModify",
+    "dn": "cn=Bob Li,ou=people,dc=example,dc=com",
+    "oldPassword": "secret",
+    "newPassword": "ignored"
+  },
+  {
+    "operation": "modify",
+    "dn": "cn=Bob Li,ou=people,dc=example,dc=com",
+    "changes": [
+      {"operation": "add", "attribute": "departmentNumber", "values": ["D-1"]}
+    ]
+  }
+]
