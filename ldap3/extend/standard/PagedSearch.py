@@ -26,8 +26,36 @@
 from ... import SUBTREE, DEREF_ALWAYS
 from ...utils.dn import safe_dn
 from ...core.results import DO_NOT_RAISE_EXCEPTIONS, RESULT_SIZE_LIMIT_EXCEEDED
-from ...core.exceptions import LDAPOperationResult
+from ...core.exceptions import LDAPOperationResult, LDAPSortControlError
+from ...protocol.rfc2891 import sort_request_control, SORT_REQUEST_CONTROL, SORT_RESPONSE_CONTROL, SORT_RESULT_SUCCESS
 from ...utils.log import log, log_enabled, ERROR, BASIC, PROTOCOL, NETWORK, EXTENDED
+
+
+def _prepare_paged_controls(controls, sort_order, sort_criticality):
+    # merges the caller controls with the server side sort control (RFC 2891)
+    search_controls = list(controls) if controls else []
+    if sort_order is not None:
+        # removes any previously included sort request control to prevent reusing it with a different cookie
+        search_controls = [control for control in search_controls if str(control['controlType']) != SORT_REQUEST_CONTROL]
+        search_controls.append(sort_request_control(sort_order, sort_criticality))
+    return search_controls
+
+
+def _check_sort_result(result, sort_order):
+    # verifies the sort response control of every page, no entry is returned if sorting failed
+    if sort_order is None:
+        return
+
+    if 'controls' not in result or SORT_RESPONSE_CONTROL not in result['controls']:
+        raise LDAPSortControlError('server did not return the sort response control')
+
+    sort_result = result['controls'][SORT_RESPONSE_CONTROL]['value']
+    if sort_result['result'] != SORT_RESULT_SUCCESS:
+        if log_enabled(PROTOCOL):
+            log(PROTOCOL, 'server side sort failed with result <%s> for <%s>', sort_result, result.get('message', ''))
+        failing_attribute = (' on attribute %r' % sort_result['attr']) if sort_result.get('attr') else ''
+        raise LDAPSortControlError('server side sort failed with result code %s%s' % (
+            sort_result['result'], failing_attribute))
 
 
 def paged_search_generator(connection,
@@ -42,9 +70,13 @@ def paged_search_generator(connection,
                            get_operational_attributes=False,
                            controls=None,
                            paged_size=100,
-                           paged_criticality=False):
+                           paged_criticality=False,
+                           sort_order=None,
+                           sort_criticality=True):
     if connection.check_names and search_base:
         search_base = safe_dn(search_base)
+
+    search_controls = _prepare_paged_controls(controls, sort_order, sort_criticality)
 
     responses = []
     original_connection = None
@@ -62,7 +94,7 @@ def paged_search_generator(connection,
                                    time_limit,
                                    types_only,
                                    get_operational_attributes,
-                                   controls,
+                                   search_controls,
                                    paged_size,
                                    paged_criticality,
                                    None if cookie is True else cookie)
@@ -75,6 +107,9 @@ def paged_search_generator(connection,
             else:
                 response = connection.response
                 result = connection.result
+
+        # the sort result of every page is checked before returning any entry of the page
+        _check_sort_result(result, sort_order)
 
         if result['referrals'] and original_auto_referrals:  # if rererrals are returned start over the loop with a new connection to the referral
             if not original_connection:
@@ -92,12 +127,14 @@ def paged_search_generator(connection,
             if log_enabled(PROTOCOL):
                 log(PROTOCOL, 'paged search operation result <%s> for <%s>', result, connection)
             if result['result'] == RESULT_SIZE_LIMIT_EXCEEDED:
-                while responses:
-                    yield responses.pop()
+                for yielded_response in responses:  # entries collected so far are still returned
+                    yield yielded_response
+                responses = []
             raise LDAPOperationResult(result=result['result'], description=result['description'], dn=result['dn'], message=result['message'], response_type=result['type'])
 
+        # entries are yielded in the same order the server sent them, required for a stable sorted paging
         while responses:
-            yield responses.pop()
+            yield responses.pop(0)
 
     if original_connection:
         connection = original_connection
@@ -122,7 +159,9 @@ def paged_search_accumulator(connection,
                              get_operational_attributes=False,
                              controls=None,
                              paged_size=100,
-                             paged_criticality=False):
+                             paged_criticality=False,
+                             sort_order=None,
+                             sort_criticality=True):
     if connection.check_names and search_base:
         search_base = safe_dn(search_base)
 
@@ -139,7 +178,9 @@ def paged_search_accumulator(connection,
                                            get_operational_attributes,
                                            controls,
                                            paged_size,
-                                           paged_criticality):
+                                           paged_criticality,
+                                           sort_order,
+                                           sort_criticality):
         responses.append(response)
 
     connection.response = responses

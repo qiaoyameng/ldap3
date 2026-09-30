@@ -45,12 +45,16 @@ from ..utils.conv import json_hook, to_unicode, to_raw
 from ..core.exceptions import LDAPDefinitionError, LDAPPasswordIsMandatoryError, LDAPInvalidValueError, LDAPSocketOpenError
 from ..core.results import RESULT_SUCCESS, RESULT_OPERATIONS_ERROR, RESULT_UNAVAILABLE_CRITICAL_EXTENSION, \
     RESULT_INVALID_CREDENTIALS, RESULT_NO_SUCH_OBJECT, RESULT_ENTRY_ALREADY_EXISTS, RESULT_COMPARE_TRUE, \
-    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN
+    RESULT_COMPARE_FALSE, RESULT_NO_SUCH_ATTRIBUTE, RESULT_UNWILLING_TO_PERFORM, RESULT_PROTOCOL_ERROR, RESULT_CONSTRAINT_VIOLATION, RESULT_NOT_ALLOWED_ON_RDN, \
+    RESULT_INAPPROPRIATE_MATCHING
 from ..utils.ciDict import CaseInsensitiveDict
 from ..utils.dn import to_dn, safe_dn, safe_rdn
 from ..protocol.sasl.sasl import validate_simple_password
 from ..protocol.formatters.standard import find_attribute_validator, format_attribute_values
 from ..protocol.rfc2696 import paged_search_control
+from ..protocol.rfc2891 import SORT_REQUEST_CONTROL, sort_response_control, \
+    sort_request_to_list, SORT_RESULT_SUCCESS, SORT_RESULT_NO_SUCH_ATTRIBUTE, \
+    SORT_RESULT_INAPPROPRIATE_MATCHING
 from ..utils.log import log, log_enabled, ERROR, BASIC
 from ..utils.asn1 import encode
 from ..utils.conv import ldap_escape_to_bytes
@@ -114,42 +118,158 @@ from ..protocol.convert import build_controls_list
 
 # noinspection PyProtectedMember,PyUnresolvedReferences
 
-SEARCH_CONTROLS = ['1.2.840.113556.1.4.319'  # simple paged search [RFC 2696]
+SEARCH_CONTROLS = ['1.2.840.113556.1.4.319',  # simple paged search [RFC 2696]
+                   SORT_REQUEST_CONTROL  # server side sort request [RFC 2891]
                    ]
 SERVER_ENCODING = 'utf-8'
+
+# ordering matching rules implemented by the mock directory
+ORDERING_RULE_CASE_IGNORE = '2.5.13.3'
+ORDERING_RULE_CASE_EXACT = '2.5.13.6'
+ORDERING_RULE_OCTET_STRING = '2.5.13.18'
+ORDERING_RULE_INTEGER = '2.5.13.15'
+ORDERING_RULE_NUMERIC_STRING = '2.5.13.9'
+ORDERING_RULE_GENERALIZED_TIME = '2.5.13.28'
+SUPPORTED_ORDERING_RULES = {ORDERING_RULE_CASE_IGNORE,
+                            ORDERING_RULE_CASE_EXACT,
+                            ORDERING_RULE_OCTET_STRING,
+                            ORDERING_RULE_INTEGER,
+                            ORDERING_RULE_NUMERIC_STRING,
+                            ORDERING_RULE_GENERALIZED_TIME}
 
 
 def random_cookie():
     return to_raw(SystemRandom().random())[-6:]
 
 
+def validate_sort_keys(sort_keys, responses, dit):
+    # checks ordering rules and attribute presence against the mock directory, as per RFC 2891 the
+    # sortResult control carries the first failing attribute and no entry is returned on failure
+    # sorting an empty result set always succeeds, no attribute presence check is possible
+    if not responses:
+        return SORT_RESULT_SUCCESS, None
+
+    for sort_key in sort_keys:
+        if sort_key['ordering_rule'] is not None and sort_key['ordering_rule'] not in SUPPORTED_ORDERING_RULES:
+            return SORT_RESULT_INAPPROPRIATE_MATCHING, sort_key['attr']
+
+        attribute = sort_key['attr'].lower()
+        if not any(attribute in dit[entry['object']] for entry in responses):
+            return SORT_RESULT_NO_SUCH_ATTRIBUTE, sort_key['attr']
+
+    return SORT_RESULT_SUCCESS, None
+
+
+def _sort_value(raw_value, ordering_rule):
+    # converts a raw attribute value in a comparable python value for the requested ordering rule
+    if ordering_rule in (ORDERING_RULE_INTEGER, ORDERING_RULE_NUMERIC_STRING):
+        try:
+            return int(to_unicode(raw_value, SERVER_ENCODING))
+        except ValueError:
+            return to_unicode(raw_value, SERVER_ENCODING)
+
+    if ordering_rule == ORDERING_RULE_OCTET_STRING:
+        return bytes(raw_value)
+
+    value = to_unicode(raw_value, SERVER_ENCODING)
+    if ordering_rule == ORDERING_RULE_CASE_EXACT:
+        return value
+
+    if ordering_rule == ORDERING_RULE_GENERALIZED_TIME:
+        return value
+
+    return value.lower()  # default and caseIgnore ordering
+
+
+def _entry_sort_key(sort_keys, dit):
+    def key_for_entry(indexed_entry):
+        index, entry = indexed_entry
+        stored_entry = dit[entry['object']]
+        key_values = []
+        for sort_key in sort_keys:
+            raw_values = stored_entry.get(sort_key['attr'].lower(), [])
+            if raw_values:  # multi-valued attributes are ordered on the least (ascending) or greatest (descending) value
+                converted = [_sort_value(raw_value, sort_key['ordering_rule']) for raw_value in raw_values]
+                selected = min(converted) if not sort_key['reverse_order'] else max(converted)
+                # missing attributes are ordered after present ones ascending, before them descending
+                present = 0 if not sort_key['reverse_order'] else 1
+            else:
+                selected = ''
+                present = 1 if not sort_key['reverse_order'] else 0
+            key_values.append((present, selected if not sort_key['reverse_order'] else _ReversedValue(selected)))
+
+        # original order keeps the sort stable for entries sharing every sort key
+        return tuple(key_values) + (index,)
+
+    return key_for_entry
+
+
+class _ReversedValue(object):
+    # helper wrapper that reverses the natural ordering of a value
+    def __init__(self, value):
+        self.value = value
+
+    def __lt__(self, other):
+        return self.value > other.value
+
+    def __le__(self, other):
+        return self.value >= other.value
+
+    def __gt__(self, other):
+        return self.value < other.value
+
+    def __ge__(self, other):
+        return self.value <= other.value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __ne__(self, other):
+        return self.value != other.value
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+def apply_sort_keys(responses, sort_keys, dit):
+    # performs a stable multi-key sort of the mock search responses
+    if not sort_keys:
+        return responses
+
+    return [entry for _, entry in sorted(enumerate(responses), key=_entry_sort_key(sort_keys, dit))]
+
+
 class PagedSearchSet(object):
-    def __init__(self, response, size, criticality):
+    def __init__(self, response, size, criticality, sort_keys=None):
         self.size = size
         self.response = response
         self.cookie = None
         self.sent = 0
         self.done = False
+        self.sort_keys = sort_keys  # the sort order is bound to the paged set, a different one invalidates the cookie
 
     def next(self, size=None):
         if size:
-            self.size=size
+            self.size = size
 
         message = ''
         response = self.response[self.sent: self.sent + self.size]
-        self.sent += self.size
-        if self.sent > len(self.response):
+        self.sent = min(self.sent + self.size, len(self.response))
+        if self.sent >= len(self.response):
             self.done = True
             self.cookie = ''
         else:
             self.cookie = random_cookie()
 
-        response_control = paged_search_control(False, len(self.response), self.cookie)
+        controls = [BaseStrategy.decode_control(paged_search_control(False, len(self.response), self.cookie))]
+        if self.sort_keys is not None:  # every page carries the same sort result control as per RFC 2891
+            controls.append(BaseStrategy.decode_control(sort_response_control(SORT_RESULT_SUCCESS)))
+
         result = {'resultCode': RESULT_SUCCESS,
                   'matchedDN': '',
                   'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
                   'referral': None,
-                  'controls': [BaseStrategy.decode_control(response_control)]
+                  'controls': controls
                   }
         return response, result
 
@@ -619,48 +739,93 @@ class MockBaseStrategy(object):
         # response_entry: object, attributes
         # response_done: LDAPResult
         request = search_request_to_dict(request_message)
-        if controls:
-            decoded_controls = [self.decode_control(control) for control in controls if control]
-            for decoded_control in decoded_controls:
-                if decoded_control[1]['criticality'] and decoded_control[0] not in SEARCH_CONTROLS:
-                    message = 'Critical requested control ' + str(decoded_control[0]) + ' not available'
-                    result = {'resultCode': RESULT_UNAVAILABLE_CRITICAL_EXTENSION,
-                              'matchedDN': '',
-                              'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
-                              'referral': None
-                              }
-                    return [], result
-                elif decoded_control[0] == '1.2.840.113556.1.4.319':  # Simple paged search
-                    if not decoded_control[1]['value']['cookie']:  # new paged search
-                        response, result =  self._execute_search(request)
-                        if result['resultCode'] == RESULT_SUCCESS:  # success
-                            paged_set = PagedSearchSet(response, int(decoded_control[1]['value']['size']), decoded_control[1]['criticality'])
-                            response, result = paged_set.next()
-                            if paged_set.done:  # paged search already completed, no need to store the set
-                                del paged_set
-                            else:
-                                self._paged_sets.append(paged_set)
-                            return response, result
-                        else:
-                            return [], result
-                    else:
-                        for paged_set in self._paged_sets:
-                            if paged_set.cookie == decoded_control[1]['value']['cookie']: # existing paged set
-                                response, result = paged_set.next()  # returns next bunch of entries as per paged set specifications
-                                if paged_set.done:
-                                    self._paged_sets.remove(paged_set)
-                                return response, result
-                        # paged set not found
-                        message = 'Invalid cookie in simple paged search'
-                        result = {'resultCode': RESULT_OPERATIONS_ERROR,
-                                  'matchedDN': '',
-                                  'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
-                                  'referral': None
-                                  }
-                        return [], result
+        decoded_controls = [self.decode_control(control) for control in controls if control] if controls else []
+        paged_control = None
+        sort_keys = None
+        for decoded_control in decoded_controls:
+            if decoded_control[1]['criticality'] and decoded_control[0] not in SEARCH_CONTROLS:
+                message = 'Critical requested control ' + str(decoded_control[0]) + ' not available'
+                result = {'resultCode': RESULT_UNAVAILABLE_CRITICAL_EXTENSION,
+                          'matchedDN': '',
+                          'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
+                          'referral': None
+                          }
+                return [], result
+            elif decoded_control[0] == '1.2.840.113556.1.4.319':  # Simple paged search
+                paged_control = decoded_control[1]
+            elif decoded_control[0] == SORT_REQUEST_CONTROL:  # Server Side Sort
+                sort_keys = sort_request_to_list(decoded_control[1]['value'])
 
-        else:
-            return self._execute_search(request)
+        def _sort_failure_result(sort_result, failing_attribute):
+            # sorting failure is signaled in the sort response control, entries are never returned
+            message = 'server side sort failed'
+            result_controls = [BaseStrategy.decode_control(sort_response_control(sort_result, failing_attribute))]
+            if paged_control is not None:  # an empty cookie closes the (never started) paged search
+                result_controls.append(BaseStrategy.decode_control(paged_search_control(False, 0, '')))
+            result = {'resultCode': RESULT_SUCCESS,
+                      'matchedDN': '',
+                      'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
+                      'referral': None,
+                      'controls': result_controls
+                      }
+            return [], result
+
+        if paged_control is not None:  # Simple paged search
+            paged_criticality = paged_control['criticality']
+            paged_control = paged_control['value']
+            if not paged_control['cookie']:  # new paged search
+                response, result = self._execute_search(request)
+                if result['resultCode'] == RESULT_SUCCESS:  # success
+                    if sort_keys is not None:
+                        sort_result, failing_attribute = validate_sort_keys(sort_keys, response, self.connection.server.dit)
+                        if sort_result != SORT_RESULT_SUCCESS:
+                            return _sort_failure_result(sort_result, failing_attribute)
+                        response = apply_sort_keys(response, sort_keys, self.connection.server.dit)
+                    paged_set = PagedSearchSet(response, int(paged_control['size']), paged_criticality, sort_keys)
+                    response, result = paged_set.next()
+                    if paged_set.done:  # paged search already completed, no need to store the set
+                        del paged_set
+                    else:
+                        self._paged_sets.append(paged_set)
+                    return response, result
+                else:
+                    return [], result
+            else:
+                for paged_set in self._paged_sets:
+                    if paged_set.cookie == paged_control['cookie']:  # existing paged set
+                        # a cookie is bound to the sort order of the paged set, it cannot be reused with a different one
+                        if sort_keys != paged_set.sort_keys:
+                            message = 'Invalid cookie in simple paged search: sort order changed during paged search'
+                            result = {'resultCode': RESULT_OPERATIONS_ERROR,
+                                      'matchedDN': '',
+                                      'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
+                                      'referral': None
+                                      }
+                            return [], result
+                        response, result = paged_set.next()  # returns next bunch of entries as per paged set specifications
+                        if paged_set.done:
+                            self._paged_sets.remove(paged_set)
+                        return response, result
+                # paged set not found
+                message = 'Invalid cookie in simple paged search'
+                result = {'resultCode': RESULT_OPERATIONS_ERROR,
+                          'matchedDN': '',
+                          'diagnosticMessage': to_unicode(message, SERVER_ENCODING),
+                          'referral': None
+                          }
+                return [], result
+
+        if sort_keys is not None:  # non paged sorted search
+            response, result = self._execute_search(request)
+            if result['resultCode'] == RESULT_SUCCESS:
+                sort_result, failing_attribute = validate_sort_keys(sort_keys, response, self.connection.server.dit)
+                if sort_result != SORT_RESULT_SUCCESS:
+                    return _sort_failure_result(sort_result, failing_attribute)
+                response = apply_sort_keys(response, sort_keys, self.connection.server.dit)
+                result['controls'] = [BaseStrategy.decode_control(sort_response_control(SORT_RESULT_SUCCESS))]
+            return response, result
+
+        return self._execute_search(request)
 
     def _execute_search(self, request):
         responses = []

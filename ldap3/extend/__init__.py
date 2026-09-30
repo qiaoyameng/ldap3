@@ -95,6 +95,8 @@ class StandardExtendedOperations(ExtendedOperationContainer):
                      controls=None,
                      paged_size=100,
                      paged_criticality=False,
+                     sort_order=None,
+                     sort_criticality=True,
                      generator=True):
 
         if generator:
@@ -110,7 +112,9 @@ class StandardExtendedOperations(ExtendedOperationContainer):
                                           get_operational_attributes,
                                           controls,
                                           paged_size,
-                                          paged_criticality)
+                                          paged_criticality,
+                                          sort_order,
+                                          sort_criticality)
         else:
             return paged_search_accumulator(self._connection,
                                             search_base,
@@ -124,7 +128,9 @@ class StandardExtendedOperations(ExtendedOperationContainer):
                                             get_operational_attributes,
                                             controls,
                                             paged_size,
-                                            paged_criticality)
+                                            paged_criticality,
+                                            sort_order,
+                                            sort_criticality)
 
     def persistent_search(self,
                           search_base='',

@@ -378,6 +378,40 @@ Working with a list keeps all the found entries in a list and you can elaborate 
 
 If the paged search operation returns an error, the paged_search() method raises an Exception of class LDAPOperationResult, subclassed to the actual error returned by the server.
 
+Server side sorting
+-------------------
+
+The paged search extended operation can ask the server to keep the result set ordered while paging, using the
+Server Side Sorting control as per RFC2891. Pass a list of sort keys in the ``sort_order`` parameter; each key is
+one of:
+
+* an attribute name: ``'sn'``
+* a tuple ``(attribute_type, ordering_rule_oid_or_None, reverse_order)``: ``('givenName', None, True)``
+* a dictionary with the ``attribute_type`` key and the optional ``ordering_rule`` and ``reverse_order`` keys.
+
+The sort control is sent on every page request together with the paged results control; the cookie returned by the
+server is bound to that sort order, so changing the sort order while paging invalidates the cookie. The sort
+response control (OID 1.2.840.113556.1.4.474) is checked on every page: if the server reports a sort failure
+(for example an unknown attribute or an unsupported ordering rule OID) an ``LDAPSortControlError`` is raised and no
+entry of that page is yielded, so the consumer never receives a batch of entries that only *looks* ordered.
+
+Example::
+
+    # entries are first ordered by department, then by uid descending, with an explicit ordering rule
+    entry_generator = c.extend.standard.paged_search(search_base='o=test',
+                                                     search_filter='(objectClass=inetOrgPerson)',
+                                                     search_scope=SUBTREE,
+                                                     attributes=['department', 'uid', 'cn'],
+                                                     paged_size=50,
+                                                     sort_order=[('department', None, False),
+                                                                 ('uid', '2.5.13.15', True)],
+                                                     generator=True)
+    for entry in entry_generator:
+        print(entry['dn'], entry['attributes'])
+
+The mock server also implements server side sorting, so multi-key ordering (including reverse order, ordering rule
+OIDs and entries missing the sorted attribute) can be demonstrated in tests without a real server.
+
 Response
 --------
 

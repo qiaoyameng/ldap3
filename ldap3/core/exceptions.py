@@ -474,6 +474,10 @@ class LDAPControlError(LDAPExceptionError, ValueError):
     pass
 
 
+class LDAPSortControlError(LDAPControlError):
+    pass
+
+
 class LDAPExtensionError(LDAPExceptionError, ValueError):
     pass
 

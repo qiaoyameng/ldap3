@@ -58,6 +58,8 @@ from ..operation.abandon import abandon_request_to_dict
 from ..core.tls import Tls
 from ..protocol.oid import Oids
 from ..protocol.rfc2696 import RealSearchControlValue
+from ..protocol.rfc2891 import SORT_REQUEST_CONTROL, SORT_RESPONSE_CONTROL, \
+    SortRequestControlValue, SortResponseControlValue, sort_response_to_dict
 from ..protocol.microsoft import DirSyncControlResponseValue
 from ..utils.log import log, log_enabled, ERROR, BASIC, PROTOCOL, NETWORK, EXTENDED, format_ldap_message
 from ..utils.asn1 import encode, decoder, ldap_result_to_dict_fast, decode_sequence
@@ -604,6 +606,11 @@ class BaseStrategy(object):
             control_value = dict()
             control_value['size'] = int(control_resp['size'])
             control_value['cookie'] = bytes(control_resp['cookie'])
+        elif control_type == SORT_REQUEST_CONTROL:  # server side sort request as per RFC2891
+            control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SortRequestControlValue())
+        elif control_type == SORT_RESPONSE_CONTROL:  # server side sort response as per RFC2891
+            control_resp, unprocessed = decoder.decode(control_value, asn1Spec=SortResponseControlValue())
+            control_value = sort_response_to_dict(control_resp)
         elif control_type == '1.2.840.113556.1.4.841':  # DirSync AD
             control_resp, unprocessed = decoder.decode(control_value, asn1Spec=DirSyncControlResponseValue())
             control_value = dict()
@@ -638,6 +645,14 @@ class BaseStrategy(object):
             control_value = dict()
             control_value['size'] = int(control_resp[0][3][0][3])
             control_value['cookie'] = bytes(control_resp[0][3][1][3])
+        elif control_type == SORT_RESPONSE_CONTROL:  # server side sort response as per RFC2891
+            control_resp = decode_sequence(control_value, 0, len(control_value))
+            control_value = dict()
+            control_value['result'] = int(control_resp[0][3][0][3])
+            if len(control_resp[0][3]) > 1:
+                control_value['attr'] = to_unicode(control_resp[0][3][1][3])
+            else:
+                control_value['attr'] = None
         elif control_type == '1.2.840.113556.1.4.841':  # DirSync AD
             control_resp = decode_sequence(control_value, 0, len(control_value))
             control_value = dict()
